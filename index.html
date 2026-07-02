@@ -350,6 +350,16 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
   animation:spin .7s linear infinite;display:inline-block}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media(max-width:560px){ .cell-action{flex-wrap:wrap} }
+
+/* ---------- Dealer-price mode controls (edit) ---------- */
+.dp-edit{display:flex;flex-direction:column;align-items:flex-end;gap:5px}
+.dp-edit select{font-family:'Inter';font-size:11.5px;font-weight:600;color:var(--ink);
+  border:1px solid var(--line);border-radius:7px;padding:4px 6px;background:#fff;cursor:pointer;max-width:130px}
+.dp-edit select:focus{outline:none;border-color:var(--boya-bright);box-shadow:0 0 0 3px rgba(46,125,224,.12)}
+.dp-inline{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;color:var(--muted)}
+.dp-inline input{width:74px;padding:4px 7px;border:1px solid var(--line);border-radius:7px;font-family:'Inter';
+  font-size:13px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink);background:#fff}
+.dp-inline input:focus{outline:none;border-color:var(--boya-bright);box-shadow:0 0 0 3px rgba(46,125,224,.12)}
 </style>
 </head>
 <body>
@@ -405,7 +415,7 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
   <div class="context-note">
     <span class="note-tag">
       <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg>
-      DP auto-calculated at <strong id="discPct" style="margin:0 3px">20%</strong> off SRP
+      Default dealer price <strong id="discPct" style="margin:0 3px">20%</strong> off SRP · set any item to % or fixed ₱
     </span>
     <span class="count-tag" id="countTag">14 products</span>
     <span id="clientNote" style="display:none">· Dealer price hidden — safe to share with clients</span>
@@ -739,10 +749,13 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
   var ADMIN = /(^|[#&?/])edit($|[#&?/])/i.test(location.hash) || /[?&]edit($|&)/i.test(location.search);
 
   function normalizeProduct(p){
-    return Object.assign({
-      id:0, category:"", model:"", srp:0, dp:0, color:"", connector:"", ean:"",
-      features:"", specs:"", image:"", photoLink:"", autoDp:true
+    p = Object.assign({
+      id:0, category:"", model:"", srp:0, dp:0, dpPct:null, dpMode:null,
+      color:"", connector:"", ean:"", features:"", specs:"", image:"", photoLink:"", autoDp:true
     }, p);
+    if(!p.dpMode) p.dpMode = p.autoDp ? "auto" : "fixed";   // migrate older data
+    p.autoDp = (p.dpMode === "auto");
+    return p;
   }
 
   var defaultState = {
@@ -789,8 +802,15 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
     return PESO + n.toLocaleString("en-PH");
   }
   function dpOf(p){
-    if(p.autoDp) return Math.round(p.srp * (1 - state.settings.discount));
-    return Math.round(Number(p.dp)||0);
+    if(p.dpMode==="pct"){
+      var pct = Number(p.dpPct);
+      if(isNaN(pct)) pct = state.settings.discount*100;
+      return Math.round(p.srp * (1 - pct/100));
+    }
+    if(p.dpMode==="fixed"){
+      return Math.round(Number(p.dp)||0);
+    }
+    return Math.round(p.srp * (1 - state.settings.discount));   // auto
   }
   function pctOff(p){
     if(!p.srp) return 0;
@@ -866,14 +886,19 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
     // DP cell — edit vs view
     var dpCell;
     if(ui.editing){
-      dpCell = '<div class="dp-edit-row">'
-        + '<label class="mini-toggle" title="Auto = 20% off SRP">'
-        +   '<input type="checkbox" class="autodp" data-id="'+p.id+'" '+(p.autoDp?'checked':'')+'>'
-        +   '<span class="mini-switch"></span>Auto'
-        + '</label>'
-        + (p.autoDp
-            ? '<span class="dp-val">'+money(dp)+'</span>'
-            : '<span class="dp-val editable num" contenteditable data-field="dp" data-id="'+p.id+'">'+ (Math.round(Number(p.dp)||0)) +'</span>')
+      var gpct = Math.round(state.settings.discount*100);
+      var mode = p.dpMode || (p.autoDp ? "auto" : "fixed");
+      var pctVal = (p.dpPct==null||p.dpPct==="") ? gpct : p.dpPct;
+      var fixedVal = Math.round(Number(p.dp)||0) || dp;
+      dpCell = '<div class="dp-edit">'
+        + '<select class="dpmode" data-id="'+p.id+'" title="How this item\u2019s dealer price is set">'
+        +   '<option value="auto"'+(mode==="auto"?' selected':'')+'>Auto ('+gpct+'% off)</option>'
+        +   '<option value="pct"'+(mode==="pct"?' selected':'')+'>% off SRP</option>'
+        +   '<option value="fixed"'+(mode==="fixed"?' selected':'')+'>Fixed \u20B1</option>'
+        + '</select>'
+        + (mode==="pct" ? '<span class="dp-inline"><input type="number" class="dppct" data-id="'+p.id+'" min="0" max="95" step="0.5" value="'+pctVal+'">% off</span>' : '')
+        + (mode==="fixed" ? '<span class="dp-inline">\u20B1 <input type="number" class="dpfixed" data-id="'+p.id+'" min="0" step="1" value="'+fixedVal+'"></span>' : '')
+        + '<span class="dp-val" data-dpval="'+p.id+'">'+money(dp)+'</span>'
         + '</div>';
     }else{
       dpCell = '<span class="dp-val">'+money(dp)+'</span>';
@@ -1051,12 +1076,28 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
     }
   });
 
-  /* auto-dp toggle */
+  /* dealer-price mode + per-item value */
   rowsRoot.addEventListener("change", function(e){
-    if(e.target.classList.contains("autodp")){
-      var p=find(e.target.getAttribute("data-id"));
-      if(p){ p.autoDp = e.target.checked; save(); render(); }
+    var t=e.target;
+    if(t.classList.contains("dpmode")){
+      var p=find(t.getAttribute("data-id")); if(!p) return;
+      p.dpMode=t.value; p.autoDp=(t.value==="auto");
+      if(t.value==="pct" && (p.dpPct==null||p.dpPct==="")) p.dpPct=Math.round(state.settings.discount*100);
+      if(t.value==="fixed" && !(Number(p.dp)>0)) p.dp=dpOf(p);
+      save(); render();
+    }else if(t.classList.contains("dppct")){
+      var pp=find(t.getAttribute("data-id")); if(pp){ pp.dpPct=parseFloat(t.value); save(); render(); }
+    }else if(t.classList.contains("dpfixed")){
+      var pf=find(t.getAttribute("data-id")); if(pf){ pf.dp=Math.round(parseFloat(t.value)||0); save(); render(); }
     }
+  });
+  /* live-update the shown dealer price while typing a % or figure (keeps focus) */
+  rowsRoot.addEventListener("input", function(e){
+    var t=e.target, p=null;
+    if(t.classList.contains("dppct")){ p=find(t.getAttribute("data-id")); if(p) p.dpPct=parseFloat(t.value); }
+    else if(t.classList.contains("dpfixed")){ p=find(t.getAttribute("data-id")); if(p) p.dp=Math.round(parseFloat(t.value)||0); }
+    else return;
+    if(p){ var el=rowsRoot.querySelector('[data-dpval="'+p.id+'"]'); if(el) el.textContent=money(dpOf(p)); }
   });
 
   /* inline editing (contenteditable) */
