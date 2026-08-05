@@ -155,6 +155,23 @@ h1,h2,h3,.display{font-family:'Sora','Inter',sans-serif}
 .cat-label .cat-count{font-family:'Inter';font-weight:600;font-size:11.5px;color:var(--muted);
   background:#fff;border:1px solid var(--line);padding:2px 9px;border-radius:999px}
 
+/* ---------- Category management (edit mode) ---------- */
+.cat-tools{display:none;align-items:center;gap:6px;margin-left:auto}
+body.editing .cat-tools{display:flex}
+.cat-tool{height:28px;min-width:28px;border-radius:8px;border:1px solid var(--line);background:#fff;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;color:var(--muted);transition:.16s;flex:none;padding:0}
+.cat-tool:hover{border-color:var(--boya-bright);color:var(--boya-blue)}
+.cat-tool:disabled{opacity:.35;cursor:default}
+.cat-tool:disabled:hover{border-color:var(--line);color:var(--muted)}
+.cat-tool svg{width:14px;height:14px}
+.cat-tool.danger:hover{border-color:#E8B4B4;color:#B42318;background:#FCE9E9}
+.cat-tool.cat-add{padding:0 11px;gap:5px;font-family:'Inter';font-weight:600;font-size:12px;
+  color:var(--boya-blue);background:var(--boya-sky);border-color:transparent}
+.cat-tool.cat-add:hover{background:#DCE9FB;border-color:transparent;color:var(--boya-deep)}
+.cat-empty{padding:20px 22px;text-align:center;color:var(--muted);font-size:13px;
+  border-bottom:1px solid var(--line);background:#FCFDFF}
+.cat-empty b{color:var(--boya-blue)}
+
 .row{
   display:grid;grid-template-columns:1.9fr 1fr 1fr 0.7fr 190px;gap:14px;align-items:center;
   padding:16px 22px;border-bottom:1px solid var(--line);transition:background .14s;
@@ -401,7 +418,7 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
   <div class="toolbar">
     <div class="search">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-      <input type="text" id="searchInput" placeholder="Search models, connectors, EAN…">
+      <input type="search" id="searchInput" name="pricelist-search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Search models, connectors, EAN…">
     </div>
     <div class="chips" id="catChips"></div>
     <div class="tool-sep"></div>
@@ -450,6 +467,9 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
       <span style="width:1px;height:26px;background:var(--line)"></span>
       <button class="btn btn-soft" id="addBtn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Add product
+      </button>
+      <button class="btn btn-soft" id="addCatBtn" title="Create a new product category">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v3M3 7v12a2 2 0 0 0 2 2h8M16 18h6M19 15v6"/></svg>Add category
       </button>
       <button class="btn btn-soft upload-btn" id="logoBtnWrap">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>Replace logo
@@ -758,9 +778,21 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
     return p;
   }
 
+  /* Categories are stored as an explicit ordered list so a category can exist
+     before it has any products in it. Older data.json files have no list —
+     catsFromProducts() rebuilds one from the products themselves. */
+  function catsFromProducts(list){
+    var out=[];
+    (list||[]).forEach(function(p){
+      if(p.category && out.indexOf(p.category)<0) out.push(p.category);
+    });
+    return out;
+  }
+
   var defaultState = {
     brand:{ name:"BOYA", tagline:"Official price list \u2014 SRP & dealer pricing for the sales team and clients.", logo:null },
     settings:{ discount:0.20, passcode:"boya2026" },
+    categories: catsFromProducts(SEED),
     products: SEED.map(normalizeProduct)
   };
 
@@ -787,6 +819,9 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
       s.brand = Object.assign({}, defaultState.brand, s.brand);
       s.settings = Object.assign({}, defaultState.settings, s.settings);
       s.products = s.products.map(normalizeProduct);
+      s.categories = Array.isArray(s.categories) && s.categories.length
+        ? s.categories.slice()
+        : catsFromProducts(s.products);
       return s;
     }catch(e){ return null; }
   }
@@ -817,10 +852,35 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
     return Math.round((1 - dpOf(p)/p.srp)*100);
   }
   function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+  /* innerText keeps line breaks the way the browser shows them; textContent is
+     the fallback so an edit can never throw if innerText isn't available. */
+  function readText(el){ return el.innerText!=null ? el.innerText : (el.textContent||""); }
+  /* Every category ever used, in display order. Any category found on a
+     product but missing from the list is appended so nothing can vanish. */
   function categories(){
-    var seen=[], out=[];
-    state.products.forEach(function(p){ if(p.category && seen.indexOf(p.category)<0){ seen.push(p.category); out.push(p.category); } });
+    if(!Array.isArray(state.categories)) state.categories = [];
+    var out = state.categories.slice();
+    state.products.forEach(function(p){
+      if(p.category && out.indexOf(p.category)<0) out.push(p.category);
+    });
     return out;
+  }
+  /* Empty categories are a working area for the admin — the team and clients
+     only ever see categories that actually have products in them. */
+  function visibleCategories(){
+    var used = {};
+    state.products.forEach(function(p){ if(p.category) used[p.category]=true; });
+    return categories().filter(function(c){ return ui.editing || used[c]; });
+  }
+  function countIn(cat){
+    return state.products.filter(function(p){ return p.category===cat; }).length;
+  }
+  /* keep state.categories in step with whatever the products actually say */
+  function syncCategories(){
+    if(!Array.isArray(state.categories)) state.categories = [];
+    state.products.forEach(function(p){
+      if(p.category && state.categories.indexOf(p.category)<0) state.categories.push(p.category);
+    });
   }
   function nextId(){
     var max=0; state.products.forEach(function(p){ if(p.id>max) max=p.id; }); return max+1;
@@ -861,7 +921,8 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
   }
 
   function renderChips(){
-    var cats = ["All"].concat(categories());
+    var cats = ["All"].concat(visibleCategories());
+    if(cats.indexOf(ui.category)<0) ui.category="All";
     catChips.innerHTML = cats.map(function(c){
       return '<button class="chip'+(ui.category===c?' active':'')+'" data-cat="'+esc(c)+'">'+esc(c)+'</button>';
     }).join("");
@@ -1017,28 +1078,69 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
       + '</div>';
   }
 
+  /* Category heading — editable in place, plain text for the team */
+  function catNameHTML(cat){
+    if(!ui.editing) return esc(cat);
+    return '<span class="editable cat-editable" contenteditable data-cat-old="'+esc(cat)+'">'+esc(cat)+'</span>';
+  }
+  /* Reorder / add a product here / delete — only rendered in edit mode */
+  function catToolsHTML(cat, idx, total){
+    var c = esc(cat);
+    return '<span class="cat-tools">'
+      + '<button class="cat-tool cat-add" data-catadd="'+c+'" title="Add a product to this category">'
+      +   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>Product</button>'
+      + '<button class="cat-tool" data-catup="'+c+'" title="Move category up"'+(idx<=0?' disabled':'')+'>'
+      +   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m18 15-6-6-6 6"/></svg></button>'
+      + '<button class="cat-tool" data-catdown="'+c+'" title="Move category down"'+(idx<0||idx>=total-1?' disabled':'')+'>'
+      +   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m6 9 6 6 6-6"/></svg></button>'
+      + '<button class="cat-tool danger" data-catdel="'+c+'" title="Delete this category">'
+      +   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>'
+      + '</span>';
+  }
+
   function render(){
     renderBrand();
     renderChips();
     var list = filtered();
     $("countTag").textContent = list.length + (list.length===1?" product":" products");
 
-    if(!list.length){
-      rowsRoot.innerHTML = '<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><div>No products match your search.</div></div>';
+    // bucket the visible products by category
+    var groups={};
+    list.forEach(function(p){
+      var key = p.category || "";
+      if(!groups[key]) groups[key]=[];
+      groups[key].push(p);
+    });
+
+    /* Category order comes from the list, not from the products. While editing
+       (and not searching) empty categories stay on screen so you can fill them. */
+    var searching = !!ui.search.trim();
+    var showEmpty = ui.editing && !searching;
+    var order = categories().filter(function(c){
+      if(ui.category!=="All" && c!==ui.category) return false;
+      return groups[c] || showEmpty;
+    });
+    // anything with a category the list doesn't know about (incl. blank) goes last
+    Object.keys(groups).forEach(function(k){ if(order.indexOf(k)<0) order.push(k); });
+
+    if(!order.length){
+      rowsRoot.innerHTML = '<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><div>'
+        + (searching || ui.category!=="All" ? "No products match your search." : "No categories yet \u2014 tap \u201cAdd category\u201d to start.")
+        + '</div></div>';
       return;
     }
-    // group by category, preserving product order
-    var order=[], groups={};
-    list.forEach(function(p){
-      if(!groups[p.category]){ groups[p.category]=[]; order.push(p.category); }
-      groups[p.category].push(p);
-    });
+
+    var all = categories();
     var html = order.map(function(cat){
-      var items = groups[cat];
-      var rows = items.map(rowHTML).join("");
+      var items = groups[cat] || [];
+      var rows = items.length
+        ? items.map(rowHTML).join("")
+        : '<div class="cat-empty">No products in <b>'+esc(cat)+'</b> yet \u2014 tap <b>+ Product</b> above to add the first one.<br>Empty categories stay hidden from the team link.</div>';
       return '<div class="cat-group">'
-        + '<div class="cat-label"><span class="swatch"></span>'+esc(cat)
-        +   '<span class="cat-count">'+items.length+'</span></div>'
+        + '<div class="cat-label"><span class="swatch"></span>' + catNameHTML(cat)
+        +   '<span class="cat-count">'+items.length+'</span>'
+        +   (ui.editing ? catToolsHTML(cat, all.indexOf(cat), all.length) : '')
+        + '</div>'
         + rows + '</div>';
     }).join("");
     rowsRoot.innerHTML = html;
@@ -1055,8 +1157,84 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
   /* ---------- product lookup ---------- */
   function find(id){ id=Number(id); return state.products.filter(function(p){return p.id===id;})[0]; }
 
+  /* ---------- categories: create / rename / reorder / delete ---------- */
+  function catExists(name, ignore){
+    var n = String(name).trim().toLowerCase();
+    return categories().some(function(c){
+      return c!==ignore && c.trim().toLowerCase()===n;
+    });
+  }
+  function addCategory(name){
+    name = String(name||"").trim();
+    if(!name) return false;
+    if(catExists(name)){ toast('"'+name+'" already exists'); return false; }
+    syncCategories();
+    state.categories.push(name);
+    save(); render(); toast('Category "'+name+'" added \u2014 tap + Product to fill it');
+    return true;
+  }
+  function renameCategory(oldName, newName){
+    newName = String(newName||"").trim();
+    if(!newName || newName===oldName){ render(); return; }
+    if(catExists(newName, oldName)){ toast('"'+newName+'" already exists'); render(); return; }
+    syncCategories();
+    var i = state.categories.indexOf(oldName);
+    if(i>=0) state.categories[i] = newName; else state.categories.push(newName);
+    state.products.forEach(function(p){ if(p.category===oldName) p.category=newName; });
+    if(ui.category===oldName) ui.category=newName;
+    save(); render(); toast("Category renamed");
+  }
+  function moveCategory(name, dir){
+    syncCategories();
+    var i = state.categories.indexOf(name), j = i+dir;
+    if(i<0 || j<0 || j>=state.categories.length) return;
+    var tmp = state.categories[i];
+    state.categories[i] = state.categories[j];
+    state.categories[j] = tmp;
+    save(); render();
+  }
+  function deleteCategory(name){
+    var n = countIn(name);
+    var msg = n
+      ? 'Delete "'+name+'" and its '+n+' product'+(n===1?"":"s")+'? This cannot be undone.'
+      : 'Delete the empty category "'+name+'"?';
+    if(!confirm(msg)) return;
+    syncCategories();
+    state.categories = state.categories.filter(function(c){ return c!==name; });
+    state.products = state.products.filter(function(p){ return p.category!==name; });
+    if(ui.category===name) ui.category="All";
+    save(); render(); toast("Category deleted");
+  }
+
+  /* one shared "new product" path, used by the toolbar and each category header */
+  function addProduct(cat){
+    cat = cat || (ui.category!=="All" ? ui.category : (categories()[0]||"New Category"));
+    syncCategories();
+    if(cat && state.categories.indexOf(cat)<0) state.categories.push(cat);
+    var np={ id:nextId(), category:cat, model:"New Product", srp:0, dp:0, autoDp:true,
+             color:"", connector:"", ean:"", features:"", specs:"", image:"", photoLink:"" };
+    state.products.push(np); ui.openRows[np.id]=true; save(); render();
+    toast("Product added \u2014 edit its details");
+    setTimeout(function(){
+      var el=document.querySelector('[data-field="model"][data-id="'+np.id+'"]');
+      if(el){
+        el.scrollIntoView({block:"center", behavior:"smooth"});
+        el.focus(); document.execCommand&&document.execCommand("selectAll",false,null);
+      }
+    },80);
+  }
+
   /* ---------- events: list ---------- */
   rowsRoot.addEventListener("click", function(e){
+    var ct = e.target.closest("[data-catadd],[data-catup],[data-catdown],[data-catdel]");
+    if(ct){
+      if(ct.hasAttribute("data-catadd"))       addProduct(ct.getAttribute("data-catadd"));
+      else if(ct.hasAttribute("data-catup"))   moveCategory(ct.getAttribute("data-catup"), -1);
+      else if(ct.hasAttribute("data-catdown")) moveCategory(ct.getAttribute("data-catdown"), 1);
+      else if(ct.hasAttribute("data-catdel"))  deleteCategory(ct.getAttribute("data-catdel"));
+      return;
+    }
+
     var t = e.target.closest("[data-toggle],[data-del],[data-rmphoto]");
     if(!t) return;
     if(t.hasAttribute("data-toggle")){
@@ -1104,16 +1282,20 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
   rowsRoot.addEventListener("blur", function(e){
     var el=e.target;
     if(!el.classList || !el.classList.contains("editable")) return;
+    if(el.classList.contains("cat-editable")){          // renaming a category heading
+      renameCategory(el.getAttribute("data-cat-old"), readText(el).trim());
+      return;
+    }
     var p=find(el.getAttribute("data-id")); if(!p) return;
     var field=el.getAttribute("data-field");
-    var val=el.innerText.trim();
+    var val=readText(el).trim();
     if(field==="srp"||field==="dp"){
       var n=parseFloat(val.replace(/[^0-9.]/g,""))||0;
       p[field]=Math.round(n);
       save(); render();
     }else{
       p[field]=val; save();
-      if(field==="category"){ render(); }
+      if(field==="category"){ syncCategories(); save(); render(); }
     }
   }, true);
 
@@ -1195,6 +1377,12 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
       $("modalDesc").textContent="Auto dealer price = SRP minus this percentage. Applies to all products on Auto.";
       $("modalInput").type="number"; $("modalInput").value=Math.round(state.settings.discount*100);
       $("modalOk").textContent="Apply";
+    }else if(mode==="addcat"){
+      $("modalTitle").textContent="Add a category";
+      $("modalDesc").textContent="Categories group the price list (e.g. BOYAMIC 2). A new one stays hidden from the team until you put a product in it.";
+      $("modalInput").type="text"; $("modalInput").value="";
+      $("modalInput").setAttribute("placeholder","e.g. BOYA Studio");
+      $("modalOk").textContent="Add category";
     }else if(mode==="setpass"){
       $("modalTitle").textContent="Change edit passcode";
       $("modalDesc").textContent="Set a new private passcode. You'll use this to unlock editing from now on \u2014 keep it somewhere safe.";
@@ -1217,6 +1405,10 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
     }else if(modalMode==="discount"){
       var pct=parseFloat(v); if(isNaN(pct)||pct<0||pct>90){ $("modalErr").textContent="Enter a number between 0 and 90."; $("modalErr").style.display="block"; return; }
       state.settings.discount=pct/100; save(); closeModal(); render(); toast("Dealer discount set to "+Math.round(pct)+"%");
+    }else if(modalMode==="addcat"){
+      if(!v){ $("modalErr").textContent="Type a category name."; $("modalErr").style.display="block"; return; }
+      if(catExists(v)){ $("modalErr").textContent='"'+v+'" already exists.'; $("modalErr").style.display="block"; return; }
+      closeModal(); addCategory(v);
     }else if(modalMode==="setpass"){
       if(v.length<3){ $("modalErr").textContent="Use at least 3 characters."; $("modalErr").style.display="block"; return; }
       state.settings.passcode=v; save(); closeModal(); toast("Passcode updated");
@@ -1224,16 +1416,8 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
   });
 
   /* ---------- add / discount / reset ---------- */
-  $("addBtn").addEventListener("click", function(){
-    var cat = ui.category!=="All" ? ui.category : (categories()[0]||"New Category");
-    var np={ id:nextId(), category:cat, model:"New Product", srp:0, dp:0, autoDp:true,
-             color:"", connector:"", ean:"", features:"", specs:"", image:"", photoLink:"" };
-    state.products.push(np); ui.openRows[np.id]=true; save(); render(); toast("Product added — edit its details");
-    setTimeout(function(){
-      var el=document.querySelector('[data-field="model"][data-id="'+np.id+'"]');
-      if(el){ el.focus(); document.execCommand&&document.execCommand("selectAll",false,null); }
-    },80);
-  });
+  $("addBtn").addEventListener("click", function(){ addProduct(null); });
+  $("addCatBtn").addEventListener("click", function(){ openModal("addcat"); });
   $("discBtn").addEventListener("click", function(){ openModal("discount"); });
   $("passBtn").addEventListener("click", function(){ openModal("setpass"); });
   $("resetBtn").addEventListener("click", function(){
@@ -1261,6 +1445,7 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
     return {
       brand:{ name:state.brand.name, tagline:state.brand.tagline, logo:state.brand.logo||null },
       settings:{ discount:state.settings.discount },
+      categories: categories(),
       products: state.products.map(normalizeProduct),
       publishedAt: new Date().toISOString()
     };
@@ -1393,6 +1578,10 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
         state.brand=Object.assign({},defaultState.brand,s.brand);
         state.settings=Object.assign({},defaultState.settings,s.settings);
         state.products=(s.products||[]).map(normalizeProduct);
+        state.categories = Array.isArray(s.categories) && s.categories.length
+          ? s.categories.slice()
+          : catsFromProducts(s.products);
+        syncCategories();
         save(); ui.openRows={}; render(); toast("Backup restored");
       }catch(err){ toast("That file could not be read"); }
     };
@@ -1424,6 +1613,10 @@ body.editing .add-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
     state.brand = Object.assign({}, defaultState.brand, cfg.brand);
     if(cfg.settings && typeof cfg.settings.discount==="number") state.settings.discount = cfg.settings.discount;
     state.products = cfg.products.map(normalizeProduct);
+    state.categories = Array.isArray(cfg.categories) && cfg.categories.length
+      ? cfg.categories.slice()
+      : catsFromProducts(cfg.products);   // older data.json with no category list
+    syncCategories();
     return true;
   }
 
